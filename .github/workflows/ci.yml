@@ -1,0 +1,49 @@
+name: CI & Self-Preflight
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  test-and-verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --python ${{ matrix.python-version }} --extra dev
+
+      - name: Lint with Ruff
+        run: uv run --python ${{ matrix.python-version }} ruff check src tests
+
+      - name: Run pytest with cryptographic receipt verification
+        run: uv run --python ${{ matrix.python-version }} invariant-gate verify "pytest -v"
+
+      - name: Run self-preflight invariant check & emit SARIF
+        if: matrix.python-version == '3.12'
+        run: uv run --python 3.12 invariant-gate sarif . --output results.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: matrix.python-version == '3.12'
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: results.sarif

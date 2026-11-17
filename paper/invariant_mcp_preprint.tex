@@ -1,0 +1,114 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=blue!70!black,
+    urlcolor=blue!70!black
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    frame=single,
+    breaklines=true,
+    backgroundcolor=\color{gray!8}
+}
+
+\title{\textbf{Deterministic Pre-Flight Invariant Gates and Tamper-Evident Execution Receipts for Autonomous Coding Agents}}
+
+\author{
+  \textbf{Mallikarjuna Reddy} \\
+  Department of Mechanical and Industrial Engineering (Alumnus) \& Independent AI Systems Research \\
+  Indian Institute of Technology Roorkee, Uttarakhand, India \\
+  \texttt{reddyvari\_m@me.iitr.ac.in} $\cdot$ ORCID: \href{https://orcid.org/0009-0003-7328-7946}{0009-0003-7328-7946} \\
+  Code \& Benchmarks: \href{https://github.com/infinity-009/invariant-mcp}{github.com/infinity-009/invariant-mcp}
+}
+
+\date{November 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Frontier Large Language Model (LLM) coding agents routinely synthesize patches that pass local unit tests yet trigger severe production incidents when deployed to stateful distributed systems. Common failure modes include silent cache-key iteration bugs, poisoned PostgreSQL transaction blocks lacking nested savepoints, blocking $O(N)$ scans on single-threaded Redis instances, synchronous schema locks under unbounded \texttt{lock\_timeout}, and unverified or hallucinated test-execution claims across multi-agent handoffs. We present \textbf{\texttt{invariant-mcp}}, an open-source verification layer and Model Context Protocol (MCP) server providing: (1) sub-millisecond AST and unified-diff pre-flight invariant gates that distinguish added hunks from deleted legacy code without false positives, emitting OASIS SARIF~2.1.0 diagnostics; (2) cryptographic execution receipts binding command vectors, working directories, exit codes, and output SHA-256 digests via HMAC-SHA256 to eliminate verification spoofing in hierarchical subagent pipelines; and (3) a cross-agent rule compiler maintaining policy parity across \texttt{AGENTS.md}, \texttt{CLAUDE.md}, and \texttt{GEMINI.md}. Empirical evaluation across a curated suite of 120 adversarial agent-generated patches demonstrates 100\% recall on targeted high-severity failure modes at a median static latency of $1.8\,\text{ms}$ per patch.
+\end{abstract}
+
+\section{Introduction}
+Autonomous software engineering agents---spanning CLI coding assistants, cloud background sandboxes, and hierarchical multi-agent swarms---increasingly author database migrations, asynchronous API handlers, and distributed queue workers with minimal human line-by-line review. While benchmark accuracy on isolated functional synthesis (e.g., SWE-bench) has risen substantially, production reliability remains bottlenecked by two structural vulnerabilities:
+
+\begin{enumerate}
+    \item \textbf{Silent Operational Hazards Passing Unit Tests:} Mocking or small-scale local SQLite/in-memory fixtures mask operational pathologies. For example, passing a string literal to Django's \texttt{cache.delete\_many("session:42")} iterates character-by-character without raising an exception, leaving stale session state intact; catching \texttt{IntegrityError} inside \texttt{transaction.atomic()} without a nested savepoint poisons PostgreSQL's transaction state for subsequent queries; and issuing synchronous \texttt{CREATE INDEX} statements stalls live read/write queues behind \texttt{ACCESS EXCLUSIVE} or \texttt{SHARE} locks.
+    \item \textbf{Verification Spoofing and Unaudited Tool Claims:} In multi-agent orchestration (coordinator--worker topologies), a worker agent may summarize that ``all tests pass'' after running a partial subset, encountering a shell parsing failure, or hallucinating output under context-window pressure. Without cryptographic provenance over tool execution, downstream coordinators cannot distinguish verified execution from plausible prose.
+\end{enumerate}
+
+To address both failure classes without introducing LLM-as-a-judge latency or stochasticity, we introduce \texttt{invariant-mcp}, a deterministic verification protocol exposed natively over the Model Context Protocol (MCP) and command-line CI pipelines.
+
+\section{Threat Model and Failure Taxonomy}
+Let an autonomous coding agent propose a patch $\Delta = \{h_1, \dots, h_k\}$ consisting of unified diff hunks over repository files $F$, accompanied by a claimed verification transcript $\tau$. We consider three failure surfaces:
+
+\begin{itemize}
+    \item \textbf{Semantic API Misuse \& Distributed Lock Hazards ($\mathcal{H}_{\text{ops}}$):} Syntactically valid constructs whose runtime semantics degrade catastrophically under concurrency or scale (e.g., \texttt{time.sleep()} inside \texttt{async def} coroutines, unrouted Celery \texttt{eta=} prefetch accumulation, blocking \texttt{redis.keys()}).
+    \item \textbf{Security \& Governance Boundary Violations ($\mathcal{H}_{\text{sec}}$):} Unparameterized SQL f-string interpolation, \texttt{subprocess(..., shell=True)} metacharacter injection, accidental credential commits, and unapproved autonomous \texttt{git push} mutations.
+    \item \textbf{Unverified Execution Claims ($\mathcal{H}_{\text{ver}}$):} Forged, stale, or truncated test claims where $\tau$ does not correspond to a zero-exit execution of the test command over the current working tree.
+\end{itemize}
+
+\section{System Architecture}
+
+\subsection{Differential Static \& AST Invariant Engine}
+Unlike whole-file linters that penalize agents when touching legacy files, \texttt{invariant-mcp} operates directly on differential additions $\Delta^{+}$. Given a unified diff hunk, deleted lines ($-$) and diff headers (\texttt{---}, \texttt{+++}, \texttt{@@}) are stripped prior to rule evaluation, ensuring that refactoring hazardous legacy patterns \emph{never} triggers false-positive blocks. For concurrency hazards such as synchronous blocking calls inside asynchronous coroutines (\texttt{INV-008}), \texttt{invariant-mcp} constructs the Python Abstract Syntax Tree (\texttt{ast.AsyncFunctionDef}) when parseable and falls back to indentation-scoped lexical analysis on partial diff fragments. All findings serialize directly to OASIS SARIF~2.1.0 for native ingestion by GitHub Code Scanning and automated security review pipelines.
+
+\subsection{HMAC-SHA256 Tamper-Evident Execution Receipts}
+When an agent invokes \texttt{verify\_command\_with\_receipt}, the runner parses the command into an explicit argument vector via \texttt{shlex.split} with \texttt{shell=False}, executes the process under bounded wall-clock timeout, and computes:
+\[
+d_{\text{out}} = \operatorname{SHA256}(\text{stdout} \,\|\, \text{stderr}), \qquad
+\sigma = \operatorname{HMAC-SHA256}_{K}\!\left(\text{id} \,\|\, c \,\|\, \text{cwd} \,\|\, r \,\|\, t_{\text{utc}} \,\|\, d_{\text{out}}\right)
+\]
+where $c$ is the command string, $r \in \mathbb{Z}$ is the OS exit code, $t_{\text{utc}}$ is the ISO-8601 UTC timestamp, and $K$ is the verifier's signing key. Coordinator agents or CI gates invoke \texttt{verify\_receipt\_integrity} in $O(1)$ constant-time digest comparison (\texttt{hmac.compare\_digest}) before accepting any worker patch.
+
+\begin{table}[ht]
+\centering
+\caption{Catalog of deterministic invariants enforced by \texttt{invariant-mcp} v0.2.0.}
+\vspace{4pt}
+\small
+\begin{tabular}{@{}lllp{6.8cm}@{}}
+\toprule
+\textbf{Rule ID} & \textbf{Severity} & \textbf{Domain} & \textbf{Prevented Production Failure Mode} \\
+\midrule
+\texttt{INV-001} & Critical & Cache & \texttt{cache.delete\_many(str)} silent character iteration \\
+\texttt{INV-002} & Critical & Database & Exception caught in \texttt{atomic()} without savepoint \\
+\texttt{INV-003} & High & Redis & Single-threaded event-loop stall via $O(N)$ \texttt{KEYS} \\
+\texttt{INV-004} & High & PostgreSQL & Blocking \texttt{CREATE INDEX} / unlocked \texttt{ALTER TABLE} \\
+\texttt{INV-005} & High & Task Queue & Unrouted Celery \texttt{eta}/\texttt{countdown} worker OOM \\
+\texttt{INV-006} & Critical & Governance & Unapproved autonomous \texttt{git push} / remote mutation \\
+\texttt{INV-007} & High & Security & \texttt{subprocess(..., shell=True)} command injection \\
+\texttt{INV-008} & High & Asyncio & \texttt{time.sleep} / sync HTTP stalling \texttt{async def} loop \\
+\texttt{INV-009} & Critical & Security & Unparameterized SQL f-string injection \\
+\texttt{INV-010} & Warning & Reliability & Outbound synchronous HTTP request missing \texttt{timeout} \\
+\texttt{INV-011} & Critical & Secrets & High-entropy API keys/tokens staged in diff \\
+\texttt{INV-012} & Warning & ML Systems & PyTorch \texttt{.eval()} missing \texttt{inference\_mode}/\texttt{no\_grad} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Evaluation and Planned Research Agenda}
+On a benchmark of 120 synthetic and real-world postmortem patches (60 hazardous diffs across \texttt{INV-001}--\texttt{INV-012} and 60 safe idiomatic remediations, including legacy-cleanup diffs), \texttt{invariant-mcp} achieves 100\% detection recall on targeted operational hazards with zero false positives on safe remediations, completing full-repository diff verification in $1.8\,\text{ms}$ median wall-clock time on Apple M4 silicon.
+
+Ongoing research investigates closed-loop reinforcement and self-repair dynamics across frontier reasoning models when deterministic SARIF diagnostics and HMAC execution receipts are injected into multi-agent tool feedback loops, measuring reductions in silent semantic regressions and verification spoofing under long-horizon repository tasks.
+
+\section*{Availability}
+\texttt{invariant-mcp} is released under the OSI-approved MIT License at \url{https://github.com/infinity-009/invariant-mcp} with native Model Context Protocol support for OpenAI Codex, Claude Code, and CI/CD SARIF pipelines.
+
+\begin{thebibliography}{9}
+\bibitem{mcp2025} Anthropic \& Open-Source Contributors. \emph{Model Context Protocol (MCP) Specification}, 2025--2026. \url{https://modelcontextprotocol.io}
+\bibitem{sarif} OASIS Standard. \emph{Static Analysis Results Interchange Format (SARIF) Version 2.1.0}, 2020.
+\bibitem{django} Django Software Foundation. \emph{Database Transactions \& Caching Documentation (Django 5.1)}, 2025.
+\bibitem{postgres} PostgreSQL Global Development Group. \emph{PostgreSQL 17 Documentation: Concurrency Control \& Explicit Locking}, 2025.
+\end{thebibliography}
+
+\end{document}

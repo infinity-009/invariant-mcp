@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use invariant-mcp in your research or engineering workflows, please cite it using the metadata below."
+title: "invariant-mcp: Deterministic Pre-Flight Invariant Gates and Cryptographic Execution Receipts for Autonomous Coding Agents"
+version: 0.2.0
+date-released: 2026-11-18
+license: MIT
+repository-code: "https://github.com/infinity-009/invariant-mcp"
+type: software
+authors:
+  - family-names: "Reddy"
+    given-names: "Mallikarjuna"
+    orcid: "https://orcid.org/0009-0003-7328-7946"
+    affiliation: "Indian Institute of Technology Roorkee"
+keywords:
+  - autonomous-coding-agents
+  - ai-safety
+  - model-context-protocol
+  - static-verification
+  - cryptographic-receipts
+  - sarif
