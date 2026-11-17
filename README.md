@@ -103,3 +103,11 @@ See [`CITATION.cff`](CITATION.cff) and the accompanying technical report in [`pa
 ## License
 
 MIT License — see [`LICENSE`](LICENSE).
+
+## GitHub Actions Integration
+
+```yaml
+- uses: astral-sh/setup-uv@v4
+- run: uvx invariant-mcp --help
+- run: uvx --from invariant-mcp invariant-gate sarif . --output results.sarif
+```
